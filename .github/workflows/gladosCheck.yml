@@ -1,18 +1,16 @@
 name: GLaDOS Railgun Check-in
 
 on:
-  # 保留手动运行按钮
+  # 保留手动运行
   workflow_dispatch:
 
-  # 北京时间自动运行
+  # GitHub 定时任务
   schedule:
-    # 每天 08:17 正常签到
-    - cron: "17 7 * * *"
-      timezone: "Asia/Shanghai"
+    # UTC 00:17 = 北京时间 08:17
+    - cron: "18 6 * * *"
 
-    # 每天 20:27 失败补签
-    - cron: "27 20 * * *"
-      timezone: "Asia/Shanghai"
+    # UTC 12:27 = 北京时间 20:27
+    - cron: "57 21 * * *"
 
 permissions:
   contents: read
@@ -38,13 +36,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Run check-in
+      - name: Run check-in and send notification
         env:
           GLADOS_ROCKS_COOKIES: ${{ secrets.GLADOS_ROCKS_COOKIES }}
           GLADOS_ROCKS_PLANS: ${{ secrets.GLADOS_ROCKS_PLANS }}
+
           RAILGUN_INFO_COOKIES: ${{ secrets.RAILGUN_INFO_COOKIES }}
           RAILGUN_INFO_PLANS: ${{ secrets.RAILGUN_INFO_PLANS }}
+
           QYWX_KEY: ${{ secrets.QYWX_KEY }}
           QYWX_AM: ${{ secrets.QYWX_AM }}
+
           GLADOS_VERBOSE: ${{ secrets.GLADOS_VERBOSE }}
         run: python checkin.py
