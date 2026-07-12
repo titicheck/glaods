@@ -1,16 +1,14 @@
 name: GLaDOS Railgun Check-in
 
 on:
-  # 保留手动运行
   workflow_dispatch:
 
-  # GitHub 定时任务
   schedule:
-    # UTC 00:17 = 北京时间 08:17
-    - cron: "*/5 * * * *"
+    # 北京时间 05:27
+    - cron: "27 21 * * *"
 
-    # UTC 12:27 = 北京时间 20:27
-    - cron: "57 21 * * *"
+    # 北京时间 17:37
+    - cron: "37 9 * * *"
 
 permissions:
   contents: read
