@@ -5,10 +5,10 @@ on:
 
   schedule:
     # 北京时间 05:27
-    - cron: "27 21 * * *"
+    - cron: "17 21 * * *"
 
     # 北京时间 17:37
-    - cron: "37 9 * * *"
+    - cron: "47 9 * * *"
 
 permissions:
   contents: read
