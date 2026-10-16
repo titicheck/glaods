@@ -271,15 +271,16 @@ ww1234567890abcdef,应用Secret,HanZineng,1000002
 
 先手动运行一次，查看 `Run check-in` 日志。
 
-工作流默认时间：
+工作流当前每天定时运行两次：
 
-```text
-17 0 * * *
-```
+| cron（UTC） | UTC 时间 | 北京时间（UTC+8） |
+|---|---|---|
+| `17 21 * * *` | 每天 21:17 | 次日 05:17 |
+| `47 9 * * *` | 每天 09:47 | 当日 17:47 |
 
-GitHub Actions 使用 UTC，对应北京时间每天 `08:17`。修改 `.github/workflows/gladosCheck.yml` 中的 `cron` 即可调整时间。
+修改 `.github/workflows/gladosCheck.yml` 中的 `cron` 即可调整时间；上表按现有表达式换算，不改变实际执行计划。
 
-GitHub 定时任务可能存在几分钟延迟，不适合要求秒级准点的任务。
+GitHub 定时任务可能延迟，不能保证准点，实际执行情况以 Actions 运行记录为准。
 
 ## 八、GitHub Actions 日志判断
 
@@ -307,3 +308,16 @@ GitHub 定时任务可能存在几分钟延迟，不适合要求秒级准点的�
 ```text
 兑换计划 'plan300' 无效；仅支持 plan0/plan100/plan200/plan500
 ```
+
+## 九、定时工作流维护
+
+公共仓库连续 60 天没有仓库活动时，GitHub 可能自动停用定时工作流。收到无活动警告时，应检查仓库和 Actions 状态，并及时完成实际维护变更。
+
+维护检查：
+
+1. 在 Actions 中确认 `GLaDOS Railgun Check-in` 处于启用状态，并检查最近的 `schedule` 运行结果；
+2. 对照工作流中的 cron 检查本文运行时间说明，保持文档与实际配置一致；
+3. 如果工作流已经因无活动被停用，在 Actions 中打开该工作流并选择 `Enable workflow`；
+4. 启用后检查后续定时运行及签到日志，区分工作流状态、Cookie 失效和接口错误。
+
+一次维护不代表永久免于无活动停用；后续仍需根据仓库实际情况进行维护。GitHub 官方规则与启停步骤见：[Disabling and enabling a workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows)。
