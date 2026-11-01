@@ -25,6 +25,12 @@ from notify import send as send_notify
 
 logger = init_logger()
 
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
 
 class CheckinStatus(Enum):
     SUCCESS = 0
@@ -53,6 +59,7 @@ class DomainConfig:
     checkin_token: str
     cookies_env: str
     plans_env: str
+    user_agents_env: str
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,7 @@ class AccountTask:
     checkin_token: str
     cookie: str
     exchange_plan: str
+    user_agent: str = DEFAULT_USER_AGENT
 
 
 @dataclass
@@ -74,6 +82,7 @@ class CheckinResult:
     days: str = "未知"
     points_total: str = "未知"
     exchange: str = "未兑换"
+    detail: str = ""
     code: CheckinStatus = CheckinStatus.FAILURE
 
     def to_dict(self) -> Dict[str, Union[str, CheckinStatus]]:
@@ -86,15 +95,17 @@ class Config:
     DOMAIN_CONFIGS = (
         DomainConfig(
             domain="glados.rocks",
-            checkin_token="glados.one",
+            checkin_token="glados.rocks",
             cookies_env="GLADOS_ROCKS_COOKIES",
             plans_env="GLADOS_ROCKS_PLANS",
+            user_agents_env="GLADOS_ROCKS_USER_AGENTS",
         ),
         DomainConfig(
             domain="railgun.info",
             checkin_token="railgun.info",
             cookies_env="RAILGUN_INFO_COOKIES",
             plans_env="RAILGUN_INFO_PLANS",
+            user_agents_env="RAILGUN_INFO_USER_AGENTS",
         ),
     )
 
@@ -110,13 +121,23 @@ class Config:
     @staticmethod
     def _split_records(raw: str) -> List[str]:
         """支持换行或 & 分隔多条记录。"""
-        return [item.strip() for item in re.split(r"[\r\n]+|&", raw) if item.strip()]
+        # 仅在下一个“账号名|值”前切分 &，避免截断 Cookie 值中的 &。
+        return [
+            item.strip()
+            for item in re.split(r"[\r\n]+|&(?=[^&|;=\r\n]+\|)", raw)
+            if item.strip()
+        ]
 
     @classmethod
-    def _parse_named_values(cls, raw: str, env_name: str) -> Dict[str, str]:
+    def _parse_named_values(
+        cls, raw: str, env_name: str, *, split_ampersand: bool = True
+    ) -> Dict[str, str]:
         """解析 `账号名|值` 记录，并拒绝重名。"""
         values: Dict[str, str] = {}
-        for line_no, record in enumerate(cls._split_records(raw), 1):
+        records = cls._split_records(raw) if split_ampersand else raw.splitlines()
+        for line_no, record in enumerate(records, 1):
+            if not record.strip():
+                continue
             if "|" not in record:
                 raise ValueError(
                     f"环境变量 {env_name} 第 {line_no} 条格式错误，应为：账号名|值"
@@ -135,9 +156,20 @@ class Config:
             values[account_name] = value
         return values
 
+    @staticmethod
+    def _normalize_cookie(value: str) -> str:
+        # 只处理请求头前缀，完整保留 gld/koa 会话和签名，不解码或改名。
+        cookie = re.sub(r"^cookie\s*:\s*", "", value, flags=re.IGNORECASE).strip()
+        if not cookie or "\r" in cookie or "\n" in cookie or "=" not in cookie:
+            raise ValueError("Cookie 格式错误，请复制 Request Headers 中完整的 Cookie 值。")
+        if cookie.startswith(("[", "{")):
+            raise ValueError("请使用 Cookie 请求头文本，不能使用 Cookie-Editor JSON 导出。")
+        return cookie
+
     def _load_domain_tasks(self, spec: DomainConfig) -> None:
         raw_cookies = os.getenv(spec.cookies_env, "").strip()
         raw_plans = os.getenv(spec.plans_env, "").strip()
+        raw_user_agents = os.getenv(spec.user_agents_env, "").strip()
 
         if not raw_cookies:
             logger.info("域名 %s 未配置 %s，跳过。", spec.domain, spec.cookies_env)
@@ -151,6 +183,12 @@ class Config:
 
         cookies = self._parse_named_values(raw_cookies, spec.cookies_env)
         plans = self._parse_named_values(raw_plans, spec.plans_env) if raw_plans else {}
+        user_agents = (
+            self._parse_named_values(
+                raw_user_agents, spec.user_agents_env, split_ampersand=False
+            )
+            if raw_user_agents else {}
+        )
 
         unknown_plan_accounts = sorted(set(plans) - set(cookies))
         if unknown_plan_accounts:
@@ -159,8 +197,30 @@ class Config:
                 spec.plans_env,
                 ", ".join(unknown_plan_accounts),
             )
+        unknown_ua_accounts = sorted(set(user_agents) - set(cookies))
+        if unknown_ua_accounts:
+            logger.warning(
+                "%s 中以下账号没有对应 Cookie，已忽略：%s",
+                spec.user_agents_env, ", ".join(unknown_ua_accounts),
+            )
 
         for account_name, cookie in cookies.items():
+            cookie = self._normalize_cookie(cookie)
+            user_agent = user_agents.get(account_name, DEFAULT_USER_AGENT)
+            if spec.domain == "glados.rocks":
+                names = {part.strip().partition("=")[0] for part in cookie.split(";")}
+                if not {"gld:sess", "gld:sess.sig"}.issubset(names):
+                    logger.warning(
+                        "[%s][%s] Cookie 缺少完整 gld:sess/gld:sess.sig；"
+                        "若认证失败，请重新登录对应域名并更新完整 Cookie。",
+                        spec.domain, account_name,
+                    )
+                if account_name not in user_agents:
+                    logger.warning(
+                        "[%s][%s] 未配置登录浏览器 User-Agent，使用默认值；"
+                        "设备校验失败时请更新 %s。",
+                        spec.domain, account_name, spec.user_agents_env,
+                    )
             plan = plans.get(account_name, ExchangePlan.PLAN0.value).lower()
             if account_name not in plans:
                 logger.warning(
@@ -180,6 +240,7 @@ class Config:
                     checkin_token=spec.checkin_token,
                     cookie=cookie,
                     exchange_plan=plan,
+                    user_agent=user_agent,
                 )
             )
 
@@ -212,16 +273,13 @@ class API:
     def __init__(self, task: AccountTask, verbose: bool = False) -> None:
         self.task = task
         self.verbose = verbose
+        self.auth_error = ""
         self.session = requests.Session()
         self.session.headers.update(
             {
                 "origin": f"https://{task.domain}",
                 "referer": f"https://{task.domain}/console/checkin",
-                "user-agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
+                "user-agent": task.user_agent,
                 "content-type": "application/json;charset=UTF-8",
                 "accept": "application/json, text/plain, */*",
             }
@@ -254,27 +312,46 @@ class API:
                 timeout=(30, 90),
             )
             if not response.ok:
+                if response.status_code in {401, 403}:
+                    self.auth_error = (
+                        f"HTTP {response.status_code}：认证被拒绝，请核对完整 Cookie 与登录浏览器 User-Agent。"
+                    )
                 logger.error(
-                    "%s 请求失败：%s %s，HTTP %s，响应：%s",
+                    "%s 请求失败：%s %s，HTTP %s",
                     self._prefix(),
                     method,
                     path,
                     response.status_code,
-                    response.text[:500],
                 )
                 return None
             if self.verbose:
                 logger.info(
-                    "%s %s %s 响应：%s",
+                    "%s %s %s HTTP %s",
                     self._prefix(),
                     method,
                     path,
-                    response.text[:1000],
+                    response.status_code,
                 )
             return response
         except requests.RequestException as exc:
-            logger.error("%s 网络请求异常：%s", self._prefix(), exc)
+            logger.error("%s 网络请求异常：%s", self._prefix(), type(exc).__name__)
             return None
+
+    def _auth_hint(self, data: Dict) -> str:
+        message = str(data.get("message", "")).lower()
+        if data.get("reason") == "device-mismatch":
+            self.auth_error = (
+                "device-mismatch：登录设备与当前请求不一致，请重新登录，"
+                "同步更新完整 Cookie 和同一浏览器的 User-Agent。"
+            )
+        elif "automated check-in detected" in message:
+            self.auth_error = (
+                "服务端拒绝签到（Automated check-in detected）：请重新登录并核对"
+                "完整 Cookie 与 User-Agent；仍失败时请向服务方确认原因。"
+            )
+        elif str(data.get("code")) == "-2" or "没有权限" in message:
+            self.auth_error = "认证失败：请重新登录对应域名，更新包含会话及签名的完整 Cookie。"
+        return self.auth_error
 
     @staticmethod
     def _json(response: Optional[requests.Response]) -> Optional[Dict]:
@@ -290,6 +367,7 @@ class API:
         data = self._json(self._request("GET", self.STATUS_PATH))
         if not data:
             return "未知", "未知", -2
+        self._auth_hint(data)
         code = int(data.get("code", -2))
         user_data = data.get("data") or {}
         left_days = user_data.get("leftDays")
@@ -314,13 +392,19 @@ class API:
             return {
                 "status": "签到失败",
                 "points": "0",
-                "message": "网络请求或响应解析失败",
+                "message": self.auth_error or "网络请求或响应解析失败",
                 "code": CheckinStatus.FAILURE,
             }
 
         code = int(data.get("code", -2))
         message = str(data.get("message", ""))
         points = str(data.get("points", 0))
+        auth_hint = self._auth_hint(data)
+        if auth_hint:
+            return {
+                "status": "签到失败", "points": "0",
+                "message": auth_hint, "code": CheckinStatus.FAILURE,
+            }
         if code == CheckinStatus.SUCCESS.value:
             return {
                 "status": "签到成功",
@@ -338,13 +422,15 @@ class API:
         return {
             "status": "签到失败",
             "points": "0",
-            "message": message or "未知错误",
+            "message": f"接口返回 code={code}；请在官网确认会话或签到要求。",
             "code": CheckinStatus.FAILURE,
         }
 
     def get_points(self) -> Tuple[str, Optional[int]]:
         data = self._json(self._request("GET", self.POINTS_PATH))
         if not data or data.get("points") is None:
+            if data:
+                self._auth_hint(data)
             return "未知", None
         try:
             points = int(float(data["points"]))
@@ -381,11 +467,21 @@ class Checker:
 
         with API(task, verbose=self.config.verbose) as api:
             result.days, result.email, _ = api.get_status()
+            if api.auth_error:
+                result.detail = api.auth_error
+                result.exchange = "未兑换（认证失败）"
+                logger.error("%s %s", prefix, result.detail)
+                return result
 
             checkin_result = api.checkin()
             result.status = str(checkin_result["status"])
             result.earned_points = str(checkin_result["points"])
             result.code = checkin_result["code"]  # type: ignore[assignment]
+            if result.code == CheckinStatus.FAILURE:
+                result.detail = str(checkin_result["message"])
+                result.exchange = "未兑换（签到失败）"
+                logger.error("%s %s", prefix, result.detail)
+                return result
 
             result.points_total, points_num = api.get_points()
 
@@ -456,6 +552,7 @@ class Checker:
                     f"域名：{result.domain}",
                     f"账号：{result.email}",
                     f"签到：{result.status}（+{result.earned_points} 积分）",
+                    *([f"说明：{result.detail}"] if result.detail else []),
                     f"剩余：{result.days}",
                     f"积分：{result.points_total}",
                     f"兑换：{result.exchange}",
@@ -480,7 +577,7 @@ def main() -> int:
         title, content = checker.format_results()
         logger.info("\n%s\n%s", title, content)
         send_notify(title, content)
-        return 0
+        return 1 if any(r.code == CheckinStatus.FAILURE for r in checker.results) else 0
     except Exception as exc:
         logger.exception("脚本执行失败：%s", exc)
         send_notify("GLaDOS/Railgun 脚本执行失败", str(exc))

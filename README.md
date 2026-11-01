@@ -41,9 +41,29 @@ PUSHDEER_SENDKEY
 示例：
 
 ```text
-主账号|koa:sess=AAAA; koa:sess.sig=BBBB;
-备用账号|koa:sess=CCCC; koa:sess.sig=DDDD;
+主账号|gld:sess=AAAA; gld:sess.sig=BBBB; koa:sess=旧会话; koa:sess.sig=旧签名;
+备用账号|gld:sess=CCCC; gld:sess.sig=DDDD;
 ```
+
+`glados.rocks` 新版会话使用 `gld:sess` 和 `gld:sess.sig`。旧的 `koa:sess` 两项可以保留，但不要只按旧示例提取两项，更不要将 `koa` 字段手动改名为 `gld`。脚本原样发送完整 Cookie，兼容 `Cookie:` 前缀；不接受 Cookie-Editor 的 JSON 导出。
+
+### 登录浏览器 User-Agent
+
+新版签到可能校验登录设备，需要使用生成该 Cookie 的同一浏览器的完整 User-Agent。新增两个按域名配置的 Secret：
+
+| 域名 | User-Agent 变量 |
+|---|---|
+| `glados.rocks` | `GLADOS_ROCKS_USER_AGENTS` |
+| `railgun.info` | `RAILGUN_INFO_USER_AGENTS`（可选） |
+
+格式为 `账号名|完整 User-Agent`，每个账号一行，账号名必须与对应 Cookie 中完全一致：
+
+```text
+主账号|Mozilla/5.0 ... 从登录浏览器复制的完整值 ...
+备用账号|Mozilla/5.0 ... 备用账号登录浏览器的完整值 ...
+```
+
+以上仅是格式示意，不能直接用作真实 User-Agent。User-Agent 记录只支持换行分隔，不用 `&` 分隔；同一个浏览器登录多个账号时，也要为各账号分别列一行。未配置的账号继续使用原默认值，`glados.rocks` 会输出提醒。不会自动套用其他账号或域名的值。
 
 ### 兑换计划变量格式
 
@@ -84,8 +104,8 @@ PUSHDEER_SENDKEY
 ### `GLADOS_ROCKS_COOKIES`
 
 ```text
-张三主号|koa:sess=AAAA; koa:sess.sig=BBBB;
-张三备用|koa:sess=CCCC; koa:sess.sig=DDDD;
+张三主号|gld:sess=AAAA; gld:sess.sig=BBBB;
+张三备用|gld:sess=CCCC; gld:sess.sig=DDDD;
 ```
 
 ### `GLADOS_ROCKS_PLANS`
@@ -120,10 +140,10 @@ PUSHDEER_SENDKEY
 
 不会再出现一个 Cookie 同时请求两个域名的问题。
 
-签到请求的 token 已按两份原项目分别保留：
+签到请求的 token 按对应域名发送，与当前官网前端使用 `window.location.hostname` 的方式一致：
 
 ```text
-glados.rocks → glados.one
+glados.rocks → glados.rocks
 railgun.info → railgun.info
 ```
 
@@ -135,20 +155,23 @@ Cookie 必须在对应域名下单独获取。`glados.rocks` 的 Cookie 不应�
 
 操作步骤：
 
-1. 登录目标域名；
+1. 在目标域名退出后重新登录；
 2. 打开签到页面；
 3. 按 `F12` 打开开发者工具；
 4. 切换到 `Network`；
-5. 刷新页面或手动签到一次；
-6. 找到 `checkin`、`status` 或其他 `/api/user/` 请求；
-7. 在 `Request Headers` 中复制完整 `Cookie`；
-8. 放入相应域名的 Cookie 变量。
+5. 刷新页面；
+6. 找到一次成功的 `/api/user/status` 请求；
+7. 在 `Request Headers` 中复制完整 `Cookie`，不要只复制某一个字段或响应头 `Set-Cookie`；
+8. 同时复制该请求的完整 `User-Agent`；
+9. 以同一个账号名分别放入对应域名的 Cookie 和 User-Agent Secret。
 
 Cookie 通常类似：
 
 ```text
-koa:sess=xxxxxxxx; koa:sess.sig=xxxxxxxx;
+gld:sess=新会话; gld:sess.sig=新签名; koa:sess=旧会话; koa:sess.sig=旧签名;
 ```
+
+`glados.rocks` 请确认至少包含完整的 `gld:sess`、`gld:sess.sig`。额外的支付或统计 Cookie 可以保留。浏览器升级或重新登录后，请同步更新 Cookie 和 User-Agent。`railgun.info` 继续从自身域名获取 Cookie，不强制要求其使用 `gld` 字段。
 
 不要把真实 Cookie 写入代码、README、Issue 或公开提交记录。
 
@@ -170,6 +193,7 @@ checkin.py
 notify.py
 logging_config.py
 requirements.txt
+tests/
 README.md
 LICENSE
 .gitignore
@@ -193,8 +217,10 @@ LICENSE
 ```text
 GLADOS_ROCKS_COOKIES
 GLADOS_ROCKS_PLANS
+GLADOS_ROCKS_USER_AGENTS
 RAILGUN_INFO_COOKIES
 RAILGUN_INFO_PLANS
+RAILGUN_INFO_USER_AGENTS
 QYWX_KEY
 ```
 
@@ -308,6 +334,22 @@ GitHub 定时任务可能延迟，不能保证准点，实际执行情况以 Act
 ```text
 兑换计划 'plan300' 无效；仅支持 plan0/plan100/plan200/plan500
 ```
+
+认证失败时会显示脱敏原因和处理建议：
+
+- `认证失败` / HTTP 401、403：重新登录相应域名，核对完整 Cookie 和 User-Agent；
+- `device-mismatch`：核对 Cookie 与 User-Agent 是否来自同一次登录的浏览器；
+- `Automated check-in detected`：服务端拒绝签到；核对配置后仍失败，应向服务方确认具体原因，不能仅凭该文案认定某个字段一定有误。
+
+状态查询已明确认证失败时，不继续签到；签到失败时，不继续查询积分或兑换。其他独立账号继续执行。任一账号签到失败时脚本返回非零退出码，Actions 会显示失败，避免日志中失败但任务仍为绿色。所有账号成功或重复签到时返回 0。
+
+每次工作流先执行离线回归测试，再读取运行步骤的 Secrets 执行签到；测试使用虚构凭据与模拟响应，不向真实接口或推送渠道发请求。本地验证命令：
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+本次认证适配依据：当前 [官网签到前端](https://glados.rocks/console/checkin) 的请求与设备错误处理，以及上游已合并的 [新版会话与设备校验修复 #18](https://github.com/lankerr/2026-glados-checkin/pull/18)。代码和离线测试通过不代表个人账号已恢复，需要更新自己的 Secrets 后检查实际运行结果。
 
 ## 九、定时工作流维护
 

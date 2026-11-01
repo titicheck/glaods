@@ -34,13 +34,18 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Run offline regression tests
+        run: python -m unittest discover -s tests -v
+
       - name: Run check-in and send notification
         env:
           GLADOS_ROCKS_COOKIES: ${{ secrets.GLADOS_ROCKS_COOKIES }}
           GLADOS_ROCKS_PLANS: ${{ secrets.GLADOS_ROCKS_PLANS }}
+          GLADOS_ROCKS_USER_AGENTS: ${{ secrets.GLADOS_ROCKS_USER_AGENTS }}
 
           RAILGUN_INFO_COOKIES: ${{ secrets.RAILGUN_INFO_COOKIES }}
           RAILGUN_INFO_PLANS: ${{ secrets.RAILGUN_INFO_PLANS }}
+          RAILGUN_INFO_USER_AGENTS: ${{ secrets.RAILGUN_INFO_USER_AGENTS }}
 
           QYWX_KEY: ${{ secrets.QYWX_KEY }}
           QYWX_AM: ${{ secrets.QYWX_AM }}
